@@ -11,18 +11,46 @@ import (
 
 func f1(p st.Personne) st.Personne {
 	// A FAIRE
+	np := p
+	if np.Sexe == "M" {
+		np.Prenom = "M." + p.Prenom
+	} else {
+		np.Prenom = "Mme." + p.Prenom
+	}
+	return np
 }
 
 func f2(p st.Personne) st.Personne {
 	// A FAIRE
+	np := st.Personne{
+		Nom:    p.Nom,
+		Prenom: p.Prenom,
+		Age:    18,
+		Sexe:   p.Sexe,
+	}
+	return np
 }
 
 func f3(p st.Personne) st.Personne {
 	// A FAIRE
+	np := st.Personne{
+		Nom:    "KESSAL",
+		Prenom: p.Prenom,
+		Age:    22,
+		Sexe:   "M",
+	}
+	return np
 }
 
 func f4(p st.Personne) st.Personne {
 	// A FAIRE
+	np := st.Personne{
+		Nom:    "ZEMALI",
+		Prenom: p.Prenom,
+		Age:    22,
+		Sexe:   "F",
+	}
+	return np
 }
 
 func UnTravail() func(st.Personne) st.Personne {

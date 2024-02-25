@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 	st "tme4-squelette/client/structures"
 	"tme4-squelette/client/travaux"
@@ -20,12 +22,19 @@ const NB_G int = 2                                     // nombre de gestionnaire
 var NB_P int = 2                                       // nombre de producteurs
 var NB_O int = 2                                       // nombre d'ouvriers
 var NB_PD int = 2                                      // nombre de producteurs distants pour la Partie 2
+var cpt_id = 0
 
 var pers_vide = st.Personne{Nom: "", Prenom: "", Age: 0, Sexe: "M"} // une personne vide
 
 type tuple struct {
 	ligne      int
 	retourChan chan string
+}
+
+type tuple_proxy struct {
+	methode string
+	id      int
+	retour  chan string
 }
 
 // paquet de personne, sur lequel on peut travailler, implemente l'interface personne_int
@@ -42,7 +51,7 @@ type personne_emp struct {
 type personne_dist struct {
 	//A Faire
 	identifiant int
-	proxy_ident chan int
+	proxy_can   chan tuple_proxy
 }
 
 /*func Newpersonne_emp() personne_emp {
@@ -92,6 +101,10 @@ func (p *personne_emp) initialise() {
 }
 
 func (p *personne_emp) travaille() {
+	/**
+	On ne devrait se trouver dans aucun de ces 3 cas, mais par sécurité et debuggage on le met
+	comme des pré-cond
+	*/
 	if p.statut == "C" || p.statut == "V" || len(p.afaire) == 0 {
 		panic("Probleme, aucun travail ne devrait être effectué")
 	}
@@ -120,27 +133,82 @@ func (p *personne_emp) donne_statut() string {
 
 func (p personne_dist) initialise() {
 	// A FAIRE
-
+	message_proxy := tuple_proxy{
+		methode: "initialise",
+		id:      p.identifiant,
+	}
+	p.proxy_can <- message_proxy
 }
 
 func (p personne_dist) travaille() {
 	// A FAIRE
+	message_proxy := tuple_proxy{
+		methode: "travaille",
+		id:      p.identifiant,
+	}
+	p.proxy_can <- message_proxy
 }
 
 func (p personne_dist) vers_string() string {
 	// A FAIRE
+	message_proxy := tuple_proxy{
+		methode: "vers_string",
+		id:      p.identifiant,
+		retour:  make(chan string),
+	}
+	p.proxy_can <- message_proxy
+	return <-message_proxy.retour
 }
 
 func (p personne_dist) donne_statut() string {
 	// A FAIRE
+
+	message_proxy := tuple_proxy{
+		methode: "donne_statut",
+		id:      p.identifiant,
+		retour:  make(chan string),
+	}
+	p.proxy_can <- message_proxy
+	return <-message_proxy.retour
 }
 
 // *** CODE DES GOROUTINES DU SYSTEME ***
 
 // Partie 2: contacté par les méthodes de personne_dist, le proxy appelle la méthode à travers le réseau et récupère le résultat
 // il doit utiliser une connection TCP sur le port donné en ligne de commande
-func proxy() {
+func proxy(port string, proxy_can chan tuple_proxy) {
 	// A FAIRE
+	/**
+	 */
+	conn, err := net.Dial("tcp", "localhost:"+port)
+	if err != nil {
+		log.Fatal("Erreur lors de la connexion au serveur:", err)
+	}
+	defer conn.Close()
+	for {
+		tuple := <-proxy_can
+		methode := tuple.methode
+		id := tuple.id
+
+		// Construire le message à envoyer au serveur
+		message := fmt.Sprintf("%d,%s\n", id, methode)
+		_, err := conn.Write([]byte(message))
+		if err != nil {
+			log.Println("Erreur lors de l'envoi du message au serveur:", err)
+			continue
+		}
+
+		buffer := make([]byte, 1024)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			log.Println("Erreur lors de l'envoi du message au serveur:", err)
+			continue
+		}
+
+		rep := string(buffer[:n])
+		fmt.Println("Reponse du serveur : ", rep)
+		tuple.retour <- rep
+	}
 }
 
 // Partie 1 : contacté par la méthode initialise() de personne_emp, récupère une ligne donnée dans le fichier source
@@ -155,6 +223,9 @@ func lecteur(data chan tuple) {
 		_ = scanner.Scan()
 		msg := <-data
 		var i = 0
+		/*
+			Pour accéder à la i-ème ligne nous avions penser à parser le texte par \n, mais ça ne marchait pas
+		*/
 		for scanner.Scan() {
 			ligne := scanner.Text()
 			if i == msg.ligne {
@@ -209,8 +280,15 @@ func producteur(ligne_retourChan chan tuple, gestionnaire_chan chan personne_int
 // Partie 2: les producteurs distants cree des personne_int implementees par des personne_dist qui contiennent un identifiant unique
 // utilisé pour retrouver l'object sur le serveur
 // la creation sur le client d'une personne_dist doit declencher la creation sur le serveur d'une "vraie" personne, initialement vide, de statut V
-func producteur_distant() {
+func producteur_distant(gestionnaire chan personne_int, proxy_channel chan tuple_proxy) {
 	// A FAIRE
+	for {
+		meth := "creer"
+		p := personne_dist{identifiant: cpt_id, proxy_can: proxy_channel}
+		proxy_channel <- tuple_proxy{id: cpt_id, methode: meth}
+		gestionnaire <- p
+		cpt_id++
+	}
 }
 
 // Partie 1: les gestionnaires recoivent des personne_int des producteurs et des ouvriers et maintiennent chacun une file de personne_int
@@ -220,12 +298,14 @@ func producteur_distant() {
 func gestionnaire(producteurs chan personne_int, ouvriers chan personne_int) {
 	// A FAIRE
 	file := make([]personne_int, 0)
+	// On laisse toujours un emplacement libre pour les ouvriers, pour que si il ne reste qu'un emplacement, on
+	// libère d'abord un ouvrier, sinon famine pour ouvrier car les producteurs ont rempli la file
 	for {
 		if len(file) == TAILLE_G-1 {
 			pers_tmp := <-ouvriers
 			file = append(file, pers_tmp)
 		} else if len(file) == TAILLE_G {
-			// Ne rien faire
+			// Ne rien faire car file pleine
 			continue
 		} else {
 			select {
@@ -266,8 +346,8 @@ func main() {
 		fmt.Println(" Format: client <port> <millisecondes d'attente>")
 		return
 	}
-	//port, _ := strconv.Atoi(os.Args[1])   // utile pour la partie 2
-	tempsDeSleep := os.Args[1]
+	port, _ := strconv.Atoi(os.Args[1]) // utile pour la partie 2
+	tempsDeSleep := os.Args[2]
 	duree, _ := time.ParseDuration(tempsDeSleep + "s")
 	fintemps := make(chan int)
 	// A FAIRE
@@ -276,6 +356,7 @@ func main() {
 	can_ouvrier := make(chan personne_int)
 	can_lecteur := make(chan tuple)
 	can_collecteur := make(chan personne_int)
+	can_proxy := make(chan tuple_proxy)
 	// lancer les goroutines (parties 1 et 2): 1 lecteur, 1 collecteur, des producteurs, des gestionnaires, des ouvriers
 	go func() {
 		lecteur(can_lecteur)
@@ -301,8 +382,15 @@ func main() {
 	}
 
 	// lancer les goroutines (partie 2): des producteurs distants, un proxy
+	go func() {
+		proxy(strconv.Itoa(port), can_proxy)
+	}()
+	for i := 0; i < NB_PD; i++ {
+		go func() {
+			producteur_distant(can_gest, can_proxy)
+		}()
+	}
 	time.Sleep(duree)
-
 	fintemps <- 0
 	<-fintemps
 	return
